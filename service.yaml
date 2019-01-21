@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: __CI_ENVIRONMENT_SLUG__-__PROJECT_NAME__
+  namespace: __CI_ENVIRONMENT_SLUG__
+  labels:
+      ui-dashboard: "true"
+spec:
+  type: ClusterIP
+  ports:
+    - name: main-port
+      port: 80
+      targetPort: __PORT__
+      protocol: TCP
+  selector:
+    app: __CI_ENVIRONMENT_SLUG__-__PROJECT_NAME__

@@ -1,0 +1,58 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: __CI_ENVIRONMENT_SLUG__-__PROJECT_NAME__
+  namespace: __CI_ENVIRONMENT_SLUG__
+  labels:
+    app: __CI_ENVIRONMENT_SLUG__-__PROJECT_NAME__
+    track: stable
+spec:
+  replicas: __REPLICAS__
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  minReadySeconds: 5
+  revisionHistoryLimit: 10
+  template:
+    metadata:
+      labels:
+        app: __CI_ENVIRONMENT_SLUG__-__PROJECT_NAME__
+        track: stable
+    spec:
+      imagePullSecrets:
+       - name: registry-key
+      containers:
+      - name: __CI_ENVIRONMENT_SLUG__-__PROJECT_NAME__
+        image: __IMAGE__:__VERSION__
+        resources:
+          limits:
+            memory: "3560Mi"
+            cpu: "1"
+          requests:
+            memory: "3Gi"
+            cpu: "500m"
+        imagePullPolicy: Always
+        ports:
+        - containerPort: __PORT__
+        livenessProbe:
+          httpGet:
+            path: /__URL_PATTERN__/actuator/health
+            port: __MANAGEMENT_PORT__
+          # Number of seconds after the container has started before liveness or readiness probes are initiated
+          initialDelaySeconds: 240
+          # Number of seconds after which the probe times out. Defaults to 1 second
+          timeoutSeconds: 60
+          # How often (in seconds) to perform the probe. Default to 10 seconds
+          periodSeconds: 60
+        readinessProbe:
+          httpGet:
+            path: /__URL_PATTERN__/actuator/health
+            port: __MANAGEMENT_PORT__
+          # Number of seconds after the container has started before liveness or readiness probes are initiated  
+          initialDelaySeconds: 240
+          # Number of seconds after which the probe times out. Defaults to 1 second
+          timeoutSeconds: 60
+          # How often (in seconds) to perform the probe. Default to 10 seconds 
+          periodSeconds: 60

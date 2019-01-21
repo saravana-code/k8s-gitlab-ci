@@ -1,0 +1,160 @@
+image: docker:latest
+services:
+  - docker:dind
+variables:
+  DOCKER_DRIVER: overlay2
+  VERSION: "1.0.0-BUILD-SNAPSHOT"
+  NAME: ${CI_ENVIRONMENT_SLUG}.example.com
+  KOPS_STATE_STORE: "s3://k8s-apps-clusters"
+  REPLICAS_UAT: 2
+  REPLICAS_PROD: 1
+  PROJECT_NAME: ${CI_PROJECT_NAME}
+  PROJECT_PATH: ${CI_PROJECT_DIR}
+  IMAGE: ${CI_REGISTRY_IMAGE}/${CI_COMMIT_REF_SLUG}
+  PREPROD_CLUSTER_NAME: preprod.example.com
+  PROD_CLUSTER_NAME: prod.example.com
+cache:
+  paths:
+    - dist/
+
+stages:
+  - build
+  - package
+  - deploy 
+
+npm-build:
+  image: node:10
+  stage: build
+  before_script:
+    - apt-get update
+    - apt-get install -y nodejs
+    - apt-get install -y build-essential
+    - curl -sL https://deb.nodesource.com/setup_9.x | bash -
+    - apt-get update
+    - apt-get install -y npm
+    - npm i npm@latest -g
+    - npm --version
+    - npm i -f
+    # - npm install -g --silent @angular/cli
+
+
+  script: "npm run build"
+
+
+######################################################################################################################
+####################### Running Docker Build Scripts based on the templates below. #####################################
+######################################################################################################################
+.docker-script-template: &docker-script
+  script:
+  - ls -lart
+  - docker login -u gitlab-ci-token -p ${CI_BUILD_TOKEN} ${CI_REGISTRY}
+  - docker build -t ${IMAGE}:latest .
+  - docker tag ${IMAGE}:latest ${IMAGE}:${VERSION}
+  - docker push ${IMAGE}:${VERSION}
+  - docker push ${IMAGE}:latest
+
+.docker-template: &docker-build
+  stage: package
+
+
+#1. application-consumer build
+docker-build:
+ <<: *docker-build
+ variables:
+   PROJECT_NAME: ui-dashboard
+ <<: *docker-script
+ dependencies:
+  - npm-build
+
+
+######################################################################################################################
+####################### Running Deployment Scripts based on the templates below. #####################################
+######################################################################################################################
+.k8s-deploy-header-template: &k8s-deploy-header
+  image: registry.gitlab.com/gitlab-examples/kubernetes-deploy
+  stage: deploy
+
+.uat-env-template: &uat-env
+  environment:
+    name: stage1
+    url: https://${CI_ENVIRONMENT_SLUG}.example.com
+
+.prod-env-template: &prod-env
+  environment:
+    name: app
+    url: https://${CI_ENVIRONMENT_SLUG}.example.com
+
+.api-var-test-env-template: &api-var-test-env
+ variables:
+   PROJECT_NAME: ui-dashboard
+   PROFILE_NAME: ui-dashboard
+   PORT: 80
+   URL_PATTERN: ui-dashboard
+   NAME: ${PREPROD_CLUSTER_NAME}
+
+.api-var-env-template: &api-var-env
+ variables:
+   PROJECT_NAME: ui-dashboard
+   PROFILE_NAME: ui-dashboard
+   PORT: 80
+   URL_PATTERN: ui-dashboard
+   NAME: ${PROD_CLUSTER_NAME}
+
+.k8s-deploy-body-template: &k8s-uat-deploy-body
+  before_script:
+   - wget https://github.com/kubernetes/kops/releases/download/1.8.1/kops-linux-amd64
+   - chmod +x kops-linux-amd64
+   - mv kops-linux-amd64 /usr/local/bin/kops
+   - kops export kubecfg --name="${NAME}" --state="${KOPS_STATE_STORE}"
+   - sed -i "s/__CI_ENVIRONMENT_SLUG__/${CI_ENVIRONMENT_SLUG}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__PROJECT_NAME__/${PROJECT_NAME}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__VERSION__/${VERSION}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s|__IMAGE__|$(sed 's/[\*\.&]/\\&/g' <<<"$IMAGE")|" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__IMAGE_PULL_SECRET__/${IMAGE_PULL_SECRET}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__PROFILE_NAME__/${PROFILE_NAME}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__PORT__/${PORT}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__REPLICAS__/${REPLICAS_UAT}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__URL_PATTERN__/${URL_PATTERN}/" deployment.yaml ingress.yaml service.yaml
+  script:
+   - kubectl get deployments -l app=${CI_ENVIRONMENT_SLUG}-$PROJECT_NAME
+   - kubectl create -f deployment.yaml || (kubectl delete -f deployment.yaml && kubectl apply -f deployment.yaml)
+   - kubectl apply -f service.yaml
+   - kubectl apply -f ingress.yaml
+   # - kubectl config view
+  #when: manual
+
+.k8s-deploy-body-template: &k8s-deploy-body
+  before_script:
+   - wget https://github.com/kubernetes/kops/releases/download/1.10.1/kops-linux-amd64
+   - chmod +x kops-linux-amd64
+   - mv kops-linux-amd64 /usr/local/bin/kops
+   - kops export kubecfg --name="${NAME}" --state="${KOPS_STATE_STORE}"
+   - sed -i "s/__CI_ENVIRONMENT_SLUG__/${CI_ENVIRONMENT_SLUG}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__PROJECT_NAME__/${PROJECT_NAME}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__VERSION__/${VERSION}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s|__IMAGE__|$(sed 's/[\*\.&]/\\&/g' <<<"$IMAGE")|" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__IMAGE_PULL_SECRET__/${IMAGE_PULL_SECRET}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__PROFILE_NAME__/${PROFILE_NAME}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__PORT__/${PORT}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__REPLICAS__/${REPLICAS_PROD}/" deployment.yaml ingress.yaml service.yaml
+   - sed -i "s/__URL_PATTERN__/${URL_PATTERN}/" deployment.yaml ingress.yaml service.yaml
+  script:
+   - kubectl get deployments -l app=${CI_ENVIRONMENT_SLUG}-$PROJECT_NAME
+   - kubectl create -f deployment.yaml || (kubectl delete -f deployment.yaml && kubectl apply -f deployment.yaml)
+   - kubectl apply -f service.yaml
+   - kubectl apply -f ingress.yaml
+   # - kubectl config view
+  #when: manual
+
+#1. apps-api deploy
+ap-deploy-uat:
+ <<: *k8s-deploy-header
+ <<: *api-var-test-env
+ <<: *k8s-uat-deploy-body
+ <<: *uat-env
+
+ap-deploy-prod:
+ <<: *k8s-deploy-header
+ <<: *api-var-env
+ <<: *k8s-deploy-body
+ <<: *prod-env
